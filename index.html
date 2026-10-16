@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Stromverbrauch">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#1E3A5F">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<title>Stromverbrauch</title>
+<style>
+:root {
+  --bg: #fdfbff; --fg: #1b1b1f; --card: #e9e7f0; --accent: #1E3A5F; --accent-fg: #fff;
+  --line: #79767d; --err: #ba1a1a; --chip: #e3e1ec;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #1b1b1f; --fg: #e4e1e6; --card: #2b2a30; --accent: #a8c8ff; --accent-fg: #00315b;
+          --line: #938f99; --err: #ffb4ab; --chip: #36343b; }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 16px/1.4 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+.tabs { display: flex; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); }
+.tabs button {
+  flex: 1; padding: 14px 4px; background: none; border: 0; border-bottom: 3px solid transparent;
+  color: var(--fg); font: inherit; font-weight: 500;
+}
+.tabs button[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--accent); }
+main { padding: 16px; max-width: 520px; margin: 0 auto; display: none; }
+main.active { display: block; }
+h1 { font-size: 1.6rem; font-weight: 400; margin: 4px 0 16px; }
+h2 { font-size: 1rem; margin: 20px 0 8px; }
+label { display: block; margin: 10px 0; }
+label span { display: block; font-size: .85rem; margin-bottom: 4px; opacity: .8; }
+input {
+  width: 100%; padding: 14px 12px; font: inherit; color: var(--fg); background: transparent;
+  border: 1px solid var(--line); border-radius: 6px;
+}
+input:focus { outline: 2px solid var(--accent); border-color: var(--accent); }
+.chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+.chips button {
+  padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: transparent;
+  color: var(--fg); font: inherit;
+}
+.chips button[aria-pressed="true"] { background: var(--chip); border-color: var(--accent); font-weight: 600; }
+.card { background: var(--card); border-radius: 12px; padding: 16px; margin-top: 16px; }
+.card p { margin: 6px 0; }
+.card .big { font-size: 1.4rem; }
+.err { color: var(--err); margin-top: 16px; }
+</style>
+</head>
+<body>
+<div class="tabs" role="tablist">
+  <button role="tab" data-tab="0" aria-selected="true">Consumption</button>
+  <button role="tab" data-tab="1" aria-selected="false">F → mAh</button>
+  <button role="tab" data-tab="2" aria-selected="false">mAh → F</button>
+</div>
+
+<main id="tab0" class="active">
+  <h1>Energy consumption</h1>
+
+  <h2>Quiescent Current</h2>
+  <label><span>Average Idle Current</span><input id="idle" inputmode="decimal" autocomplete="off"></label>
+  <div class="chips" id="idleUnit"><button data-v="0.000001">nA</button><button data-v="0.001" aria-pressed="true">µA</button></div>
+
+  <h2>Tx pulse</h2>
+  <label><span>mA peak</span><input id="peak" inputmode="decimal" autocomplete="off"></label>
+  <label><span>duration (msec)</span><input id="dur" inputmode="decimal" autocomplete="off"></label>
+  <label><span>No. of pulses</span><input id="cnt" inputmode="decimal" autocomplete="off"></label>
+  <div class="chips" id="interval">
+    <button data-v="0.016666666666666666">per minute</button>
+    <button data-v="1" aria-pressed="true">per hour</button>
+    <button data-v="24">per day</button>
+  </div>
+
+  <h2>Battery (optional)</h2>
+  <label><span>Capacity (mAh)</span><input id="cap" inputmode="decimal" autocomplete="off"></label>
+  <label><span>Self-discharge (% per year)</span><input id="self" inputmode="decimal" autocomplete="off"></label>
+
+  <div id="out0"></div>
+</main>
+
+<main id="tab1">
+  <h1>Farad to mAh</h1>
+  <label><span>Capacitance (F)</span><input id="f1" inputmode="decimal" autocomplete="off"></label>
+  <label><span>V max (V)</span><input id="hi1" inputmode="decimal" autocomplete="off"></label>
+  <label><span>V min (V)</span><input id="lo1" inputmode="decimal" autocomplete="off"></label>
+  <div id="out1"></div>
+</main>
+
+<main id="tab2">
+  <h1>mAh to Farad</h1>
+  <label><span>Capacity (mAh)</span><input id="m2" inputmode="decimal" autocomplete="off"></label>
+  <label><span>V max (V)</span><input id="hi2" inputmode="decimal" autocomplete="off"></label>
+  <label><span>V min (V)</span><input id="lo2" inputmode="decimal" autocomplete="off"></label>
+  <div id="out2"></div>
+</main>
+
+<script>
+"use strict";
+
+// ---- Berechnung (identisch zur Android-App) ----
+function calculate(passive, unit, peakMa, durMs, count, intervalHours) {
+  if ([passive, peakMa, durMs, count].some(v => v < 0 || Number.isNaN(v))) return null;
+  const pulsesPerHour = count / intervalHours;
+  const fraction = durMs / 1000 * pulsesPerHour / 3600;
+  if (fraction > 1) return null;
+  const avg = passive * unit * (1 - fraction) + peakMa * fraction;
+  return { avg, hour: avg, day: avg * 24, month: avg * 24 * 30, year: avg * 24 * 365 };
+}
+function farad2mah(c, hi, lo) {
+  if (c <= 0 || lo < 0 || hi <= lo) return null;
+  return c * (hi - lo) / 3.6;
+}
+function mah2farad(m, hi, lo) {
+  if (m <= 0 || lo < 0 || hi <= lo) return null;
+  return m * 3.6 / (hi - lo);
+}
+function runtimeHours(avg, cap, selfPct) {
+  if (cap <= 0 || avg < 0 || selfPct < 0) return null;
+  const total = avg + cap * selfPct / 100 / (24 * 365);
+  return total <= 0 ? null : cap / total;
+}
+
+// ---- Anzeige ----
+const num = s => { const t = s.replace(",", ".").trim(); return t === "" ? NaN : Number(t); };
+function fmt(v) {
+  if (v === 0) return "0";
+  return v < 0.01 ? v.toExponential(2) : v.toFixed(2);
+}
+const $ = id => document.getElementById(id);
+const err = t => `<p class="err">${t}</p>`;
+const card = (title, big, rest) =>
+  `<div class="card"><strong>${title}</strong><p class="big">${big}</p>${rest.map(r => `<p>${r}</p>`).join("")}</div>`;
+
+function chipValue(id) { return Number(document.querySelector(`#${id} [aria-pressed="true"]`).dataset.v); }
+
+function update0() {
+  const vals = ["idle", "peak", "dur", "cnt"].map(id => num($(id).value));
+  if (vals.some(Number.isNaN)) { $("out0").innerHTML = `<p style="margin-top:16px">Please fill in all fields.</p>`; return; }
+  const r = calculate(vals[0], chipValue("idleUnit"), vals[1], vals[2], vals[3], chipValue("interval"));
+  if (!r) { $("out0").innerHTML = err("Invalid input (negative values, or pulses last longer than one hour)."); return; }
+  let html = `<div class="card"><strong>Result</strong>
+    <p>Avg. current: ${fmt(r.avg * 1000)} µA</p>
+    <p>Per hour: ${fmt(r.hour)} mAh</p>
+    <p class="big">Per day: ${fmt(r.day)} mAh</p>
+    <p>Per month (30 d): ${fmt(r.month)} mAh</p>
+    <p>Per year (365 d): ${fmt(r.year)} mAh</p></div>`;
+  const capTxt = $("cap").value, selfTxt = $("self").value;
+  if (capTxt.trim() !== "") {
+    const cap = num(capTxt), self = selfTxt.trim() === "" ? 0 : num(selfTxt);
+    if (Number.isNaN(cap) || Number.isNaN(self)) {
+      html += err("Invalid battery input.");
+    } else {
+      const h = runtimeHours(r.avg, cap, self);
+      html += h === null
+        ? card("Battery life", "–", ["Invalid battery input or no consumption."])
+        : card("Battery life", `${fmt(h / 24)} days`, [`${fmt(h / 24 / 365)} years`]);
+    }
+  }
+  $("out0").innerHTML = html;
+}
+
+function updateConv(n, fn, unit, back) {
+  const v = [`${n === 1 ? "f1" : "m2"}`, `hi${n}`, `lo${n}`].map(id => num($(id).value));
+  const out = $(`out${n}`);
+  if (v.some(Number.isNaN)) { out.innerHTML = `<p style="margin-top:16px">Please fill in all fields.</p>`; return; }
+  const r = fn(v[0], v[1], v[2]);
+  if (r === null) {
+    out.innerHTML = err(n === 1 ? "Invalid input (C > 0, V max > V min ≥ 0)." : "Invalid input (mAh > 0, V max > V min ≥ 0).");
+    return;
+  }
+  out.innerHTML = card("Result", `${fmt(r)} ${unit}`, [`${fmt(back(v, r))} C`]);
+}
+const update1 = () => updateConv(1, farad2mah, "mAh", (v) => v[0] * (v[1] - v[2]));
+const update2 = () => updateConv(2, mah2farad, "F", (v) => v[0] * 3.6);
+
+// ---- Verdrahtung & Speicherung ----
+const fields = ["idle","peak","dur","cnt","cap","self","f1","hi1","lo1","m2","hi2","lo2"];
+function save() {
+  try {
+    const s = { f: Object.fromEntries(fields.map(id => [id, $(id).value])),
+      idleUnit: chipValue("idleUnit"), interval: chipValue("interval") };
+    localStorage.setItem("stromverbrauch", JSON.stringify(s));
+  } catch (e) {}
+}
+function load() {
+  try {
+    const s = JSON.parse(localStorage.getItem("stromverbrauch") || "null");
+    if (!s) return;
+    fields.forEach(id => { if (s.f[id] !== undefined) $(id).value = s.f[id]; });
+    for (const [id, v] of [["idleUnit", s.idleUnit], ["interval", s.interval]]) {
+      document.querySelectorAll(`#${id} button`).forEach(b =>
+        b.setAttribute("aria-pressed", String(Number(b.dataset.v) === v)));
+    }
+  } catch (e) {}
+}
+function updateAll() { update0(); update1(); update2(); save(); }
+
+fields.forEach(id => $(id).addEventListener("input", updateAll));
+["idleUnit", "interval"].forEach(id =>
+  $(id).addEventListener("click", e => {
+    if (e.target.tagName !== "BUTTON") return;
+    $(id).querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b === e.target)));
+    updateAll();
+  }));
+document.querySelector(".tabs").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  document.querySelectorAll(".tabs button").forEach(x => x.setAttribute("aria-selected", String(x === b)));
+  document.querySelectorAll("main").forEach((m, i) => m.classList.toggle("active", i === Number(b.dataset.tab)));
+});
+
+load();
+updateAll();
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+</script>
+</body>
+</html>
